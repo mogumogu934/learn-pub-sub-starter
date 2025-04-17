@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	QueueTypeDurable   = 0
-	QueueTypeTransient = 1
+	SimpleQueueDurable   = 0
+	SimpleQueueTransient = 1
 )
 
 func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
@@ -56,7 +56,7 @@ func DeclareAndBind(
 	exclusive := false
 	noWait := false
 
-	if simpleQueueType == QueueTypeTransient {
+	if simpleQueueType == SimpleQueueTransient {
 		durable = false
 		autoDelete = true
 		exclusive = true
