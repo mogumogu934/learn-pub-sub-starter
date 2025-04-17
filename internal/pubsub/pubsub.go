@@ -4,8 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+const (
+	QueueTypeDurable   = 0
+	QueueTypeTransient = 1
 )
 
 func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
@@ -30,4 +36,54 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 	}
 
 	return nil
+}
+
+func DeclareAndBind(
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType int, // an enum to represent "durable" or "transient"
+) (*amqp.Channel, amqp.Queue, error) {
+
+	connChan, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("unable to open channel: %v", err)
+	}
+
+	durable := true
+	autoDelete := false
+	exclusive := false
+	noWait := false
+
+	if simpleQueueType == QueueTypeTransient {
+		durable = false
+		autoDelete = true
+		exclusive = true
+	}
+
+	queue, err := connChan.QueueDeclare(
+		queueName,
+		durable,
+		autoDelete,
+		exclusive,
+		noWait,
+		nil,
+	)
+	if err != nil {
+		return &amqp.Channel{}, amqp.Queue{}, fmt.Errorf("unable to declare queue: %v", err)
+	}
+
+	err = connChan.QueueBind(
+		queueName,
+		key,
+		exchange,
+		noWait,
+		nil,
+	)
+	if err != nil {
+		return &amqp.Channel{}, amqp.Queue{}, fmt.Errorf("unable to bind queue to exchange: %v", err)
+	}
+
+	return connChan, queue, nil
 }
