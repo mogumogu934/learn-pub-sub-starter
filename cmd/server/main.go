@@ -29,6 +29,18 @@ func main() {
 		log.Fatalf("unable to create channel: %v", err)
 	}
 
+	_, _, err = pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		"game_logs.*",
+		pubsub.SimpleQueueDurable,
+	)
+	if err != nil {
+		log.Println("unable to declare and bind queue to exchange", err)
+	}
+	fmt.Printf("Queue %v declared and bound\n", routing.GameLogSlug)
+
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 	go func() {
