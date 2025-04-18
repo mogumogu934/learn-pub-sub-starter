@@ -23,6 +23,11 @@ func main() {
 	defer conn.Close()
 	fmt.Println("Peril game client connected to RabbitMQ")
 
+	publishChan, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("could not create channel: %v", err)
+	}
+
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
 		log.Fatalf("could not get username: %v", err)
@@ -30,34 +35,65 @@ func main() {
 
 	gameState := gamelogic.NewGameState(username)
 
-	pauseQueue := fmt.Sprintf("%s.%s", routing.PauseKey, username)
-
 	_, _, err = pubsub.DeclareAndBind(
 		conn,
 		routing.ExchangePerilDirect,
-		pauseQueue,
+		fmt.Sprintf("%s.%s", routing.PauseKey, username),
 		routing.PauseKey,
 		pubsub.SimpleQueueTransient,
 	)
 	if err != nil {
-		log.Fatalf("unable to declare and bind queue '%s' to exchange '%s': %v", pauseQueue, routing.ExchangePerilDirect, err)
+		log.Fatalf("unable to declare and bind pause queue to exchange: %v", err)
 	}
-	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", pauseQueue, routing.ExchangePerilDirect)
-
-	moveQueue := fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username)
-	moveKey := fmt.Sprintf("%s.*", routing.ArmyMovesPrefix)
+	fmt.Println("Pause queue declared and bound to exchange")
 
 	moveChan, _, err := pubsub.DeclareAndBind(
 		conn,
 		routing.ExchangePerilTopic,
-		moveQueue,
-		moveKey,
+		fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username),
+		fmt.Sprintf("%s.*", routing.ArmyMovesPrefix),
 		pubsub.SimpleQueueTransient,
 	)
 	if err != nil {
-		log.Fatalf("unable to declare and bind queue '%s' to exchange '%s': %v", moveQueue, routing.ExchangePerilTopic, err)
+		log.Fatalf("unable to declare and bind army moves queue to exchange: %v", err)
 	}
-	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", moveQueue, routing.ExchangePerilTopic)
+	fmt.Println("Army moves queue declared and bound to exchange")
+
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		fmt.Sprintf("%s.%s", routing.PauseKey, username),
+		routing.PauseKey,
+		pubsub.SimpleQueueTransient,
+		HandlerPause(gameState),
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe to pause game: %v", err)
+	}
+
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username),
+		fmt.Sprintf("%s.*", routing.ArmyMovesPrefix),
+		pubsub.SimpleQueueTransient,
+		HandlerMove(gameState, publishChan),
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe to army moves: %v", err)
+	}
+
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.WarRecognitionsPrefix,
+		fmt.Sprintf("%s.*", routing.WarRecognitionsPrefix),
+		pubsub.SimpleQueueDurable,
+		HandlerWar(gameState),
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe to war declarations: %v", err)
+	}
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -65,30 +101,6 @@ func main() {
 		<-signalChan
 		os.Exit(0)
 	}()
-
-	err = pubsub.SubscribeJSON(
-		conn,
-		routing.ExchangePerilTopic,
-		pauseQueue,
-		routing.PauseKey,
-		pubsub.SimpleQueueTransient,
-		HandlerPause(gameState),
-	)
-	if err != nil {
-		log.Fatalf("unable to subscribe to routing key '%s': %v", routing.PauseKey, err)
-	}
-
-	err = pubsub.SubscribeJSON(
-		conn,
-		routing.ExchangePerilTopic,
-		moveQueue,
-		moveKey,
-		pubsub.SimpleQueueTransient,
-		HandlerMove(gameState),
-	)
-	if err != nil {
-		log.Fatalf("unable to subscribe to routing key '%s': %v", moveKey, err)
-	}
 
 	for {
 		fmt.Println()
@@ -113,7 +125,7 @@ func main() {
 			err = pubsub.PublishJSON(
 				moveChan,
 				routing.ExchangePerilTopic,
-				moveQueue,
+				fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username),
 				move,
 			)
 			if err != nil {
