@@ -37,9 +37,9 @@ func main() {
 		pubsub.SimpleQueueDurable,
 	)
 	if err != nil {
-		log.Println("unable to declare and bind queue to exchange", err)
+		log.Fatalf("unable to declare and bind queue '%s' to exchange '%s': %v", routing.GameLogSlug, routing.ExchangePerilTopic, err)
 	}
-	fmt.Printf("Queue %v declared and bound\n", routing.GameLogSlug)
+	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", routing.GameLogSlug, routing.ExchangePerilTopic)
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)

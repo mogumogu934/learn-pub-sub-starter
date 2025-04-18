@@ -25,22 +25,39 @@ func main() {
 
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
-		fmt.Println(err)
+		log.Fatalf("could not get username: %v", err)
 	}
 
-	queueName := fmt.Sprintf("%s.%s", routing.PauseKey, username)
+	gameState := gamelogic.NewGameState(username)
+
+	pauseQueue := fmt.Sprintf("%s.%s", routing.PauseKey, username)
 
 	_, _, err = pubsub.DeclareAndBind(
 		conn,
 		routing.ExchangePerilDirect,
-		queueName,
+		pauseQueue,
 		routing.PauseKey,
 		pubsub.SimpleQueueTransient,
 	)
 	if err != nil {
-		log.Println("unable to declare and bind queue to exchange", err)
+		log.Fatalf("unable to declare and bind queue '%s' to exchange '%s': %v", pauseQueue, routing.ExchangePerilDirect, err)
 	}
-	fmt.Printf("Queue %v declared and bound\n", queueName)
+	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", pauseQueue, routing.ExchangePerilDirect)
+
+	moveQueue := fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username)
+	moveKey := fmt.Sprintf("%s.*", routing.ArmyMovesPrefix)
+
+	moveChan, _, err := pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		moveQueue,
+		moveKey,
+		pubsub.SimpleQueueTransient,
+	)
+	if err != nil {
+		log.Fatalf("unable to declare and bind queue '%s' to exchange '%s': %v", moveQueue, routing.ExchangePerilTopic, err)
+	}
+	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", moveQueue, routing.ExchangePerilTopic)
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -49,7 +66,29 @@ func main() {
 		os.Exit(0)
 	}()
 
-	gameState := gamelogic.NewGameState(username)
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		pauseQueue,
+		routing.PauseKey,
+		pubsub.SimpleQueueTransient,
+		HandlerPause(gameState),
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe to routing key '%s': %v", routing.PauseKey, err)
+	}
+
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		moveQueue,
+		moveKey,
+		pubsub.SimpleQueueTransient,
+		HandlerMove(gameState),
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe to routing key '%s': %v", moveKey, err)
+	}
 
 	for {
 		fmt.Println()
@@ -65,10 +104,24 @@ func main() {
 				fmt.Println(err)
 			}
 		case "move":
-			_, err := gameState.CommandMove(input)
+			move, err := gameState.CommandMove(input)
 			if err != nil {
 				fmt.Println(err)
+				continue
 			}
+
+			err = pubsub.PublishJSON(
+				moveChan,
+				routing.ExchangePerilTopic,
+				moveQueue,
+				move,
+			)
+			if err != nil {
+				log.Printf("unable to publish move: %v", err)
+				continue
+			}
+			fmt.Printf("Moved unit to %s\n", move.ToLocation)
+
 		case "status":
 			gameState.CommandStatus()
 		case "help":
@@ -80,7 +133,6 @@ func main() {
 			os.Exit(0)
 		default:
 			fmt.Println("unknown command")
-			continue
 		}
 	}
 }
