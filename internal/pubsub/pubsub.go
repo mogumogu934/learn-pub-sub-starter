@@ -6,12 +6,21 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/mogumogu934/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 const (
 	SimpleQueueDurable   = 0
 	SimpleQueueTransient = 1
+)
+
+type AckType string
+
+const (
+	Ack         AckType = "ack"
+	NackRequeue AckType = "nackrequeue"
+	NackDiscard AckType = "nackdiscard"
 )
 
 func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
@@ -68,7 +77,9 @@ func DeclareAndBind(
 		autoDelete,
 		exclusive,
 		noWait,
-		nil,
+		amqp.Table{
+			"x-dead-letter-exchange": routing.ExchangePerilDeadLetter,
+		},
 	)
 	if err != nil {
 		return &amqp.Channel{}, amqp.Queue{}, fmt.Errorf("unable to declare queue: %v", err)
@@ -94,7 +105,7 @@ func SubscribeJSON[T any](
 	queueName,
 	key string,
 	simpleQueueType int, // an enum to represent "durable" or "transient"
-	handler func(T),
+	handler func(T) (ack AckType),
 ) error {
 
 	subscribeChan, _, err := DeclareAndBind(
@@ -120,9 +131,21 @@ func SubscribeJSON[T any](
 				log.Printf("unable to unmarshal %v:\n%v", d.Body, err)
 			}
 
-			handler(target)
-			if err = d.Ack(true); err != nil {
-				log.Printf("could not acknowledge delivery: %v", err)
+			switch handler(target) {
+			case Ack:
+				if err = d.Ack(false); err != nil {
+					log.Printf("could not acknowledge delivery: %v", err)
+				}
+			case NackRequeue:
+				if err = d.Nack(false, true); err != nil { // requeue=true
+					log.Printf("could not negative acknowledge delivery: %v", err)
+				}
+			case NackDiscard:
+				if err = d.Nack(false, false); err != nil { // requeue=false
+					log.Printf("could not negative acknowledge delivery: %v", err)
+				}
+			default:
+				log.Printf("unknown ack type: %v", handler(target))
 			}
 		}
 	}()
