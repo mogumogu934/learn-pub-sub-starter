@@ -1,6 +1,8 @@
 package pubsub
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -22,15 +24,15 @@ const (
 	SimpleQueueTransient = 1
 )
 
-func SubscribeJSON[T any](
+func subscribe[T any](
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
-	simpleQueueType int, // an enum to represent "durable" or "transient"
-	handler func(T) (ack AckType),
+	simpleQueueType int,
+	handler func(T) AckType,
+	unmarshaller func([]byte) (T, error),
 ) error {
-
 	subscribeChan, _, err := DeclareAndBind(
 		conn,
 		exchange,
@@ -49,12 +51,14 @@ func SubscribeJSON[T any](
 
 	go func() {
 		for d := range deliveryChan {
-			var target T
-			if err = json.Unmarshal(d.Body, &target); err != nil {
-				log.Printf("unable to unmarshal %v:\n%v", d.Body, err)
+			value, err := unmarshaller(d.Body)
+			if err != nil {
+				log.Printf("unable to decode message:\n%v", err)
+				continue
 			}
 
-			switch handler(target) {
+			ackType := handler(value)
+			switch ackType {
 			case Ack:
 				if err = d.Ack(false); err != nil {
 					log.Printf("could not acknowledge delivery: %v", err)
@@ -68,7 +72,7 @@ func SubscribeJSON[T any](
 					log.Printf("could not negative acknowledge delivery: %v", err)
 				}
 			default:
-				log.Printf("unknown ack type: %v", handler(target))
+				log.Printf("unknown ack type: %v", ackType)
 			}
 		}
 	}()
@@ -76,12 +80,50 @@ func SubscribeJSON[T any](
 	return nil
 }
 
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType int,
+	handler func(T) AckType,
+) error {
+
+	unmarshaller := func(data []byte) (T, error) {
+		var value T
+		err := json.Unmarshal(data, &value)
+		return value, err
+	}
+
+	return subscribe(conn, exchange, queueName, key, simpleQueueType, handler, unmarshaller)
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType int,
+	handler func(T) AckType,
+) error {
+
+	unmarshaller := func(data []byte) (T, error) {
+		var value T
+		buffer := bytes.NewBuffer(data)
+		dec := gob.NewDecoder(buffer)
+		err := dec.Decode(&value)
+		return value, err
+	}
+
+	return subscribe(conn, exchange, queueName, key, simpleQueueType, handler, unmarshaller)
+}
+
 func DeclareAndBind(
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
-	simpleQueueType int, // an enum to represent "durable" or "transient"
+	simpleQueueType int,
 ) (*amqp.Channel, amqp.Queue, error) {
 
 	connChan, err := conn.Channel()

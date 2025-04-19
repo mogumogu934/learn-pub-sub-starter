@@ -41,6 +41,27 @@ func main() {
 	}
 	fmt.Printf("Queue '%s' declared and bound to exchange '%s'\n", routing.GameLogSlug, routing.ExchangePerilTopic)
 
+	handlerSubscribeGob := func(gameLog routing.GameLog) pubsub.AckType {
+		defer fmt.Print("> ")
+		if err := gamelogic.WriteLog(gameLog); err != nil {
+			log.Printf("unable to write game log: %v", err)
+			return pubsub.NackRequeue
+		}
+		return pubsub.Ack
+	}
+
+	err = pubsub.SubscribeGob(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		"game_logs.*",
+		pubsub.SimpleQueueDurable,
+		handlerSubscribeGob,
+	)
+	if err != nil {
+		log.Fatalf("unable to subscribe gob to game_logs queue: %v", err)
+	}
+
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 	go func() {
@@ -86,7 +107,6 @@ func main() {
 			}
 
 		case "quit":
-			fmt.Println("Exiting the game")
 			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 		default:
 			fmt.Println("unknown command")
