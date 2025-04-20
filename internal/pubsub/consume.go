@@ -44,6 +44,11 @@ func subscribe[T any](
 		return fmt.Errorf("unable to declare and bind queue to exchange: %v", err)
 	}
 
+	err = subscribeChan.Qos(10, 0, true)
+	if err != nil {
+		return fmt.Errorf("unable to set prefetch count: %v", err)
+	}
+
 	deliveryChan, err := subscribeChan.Consume("", "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("unable to get delivery channel: %v", err)

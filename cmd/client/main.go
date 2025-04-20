@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"time"
 
 	"github.com/mogumogu934/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/mogumogu934/learn-pub-sub-starter/internal/pubsub"
@@ -133,13 +135,36 @@ func main() {
 				continue
 			}
 			fmt.Printf("Moved unit to %s\n", move.ToLocation)
-
 		case "status":
 			gameState.CommandStatus()
 		case "help":
 			gamelogic.PrintClientHelp()
 		case "spam":
-			fmt.Println("Spamming not allowed yet!")
+			if len(input) < 2 {
+				log.Println("usage: spam <integer>")
+			}
+
+			num, err := strconv.Atoi(input[1])
+			if err != nil {
+				log.Printf("failed to convert string to integer: %v", err)
+				continue
+			}
+
+			fmt.Printf("Publishing %d malicious game log(s)!\n", num)
+
+			for range num {
+				malLog := gamelogic.GetMaliciousLog()
+				pubsub.PublishGob(
+					publishChan,
+					routing.ExchangePerilTopic,
+					fmt.Sprintf("%s.%s", routing.GameLogSlug, username),
+					routing.GameLog{
+						CurrentTime: time.Now(),
+						Message:     malLog,
+						Username:    username,
+					},
+				)
+			}
 		case "quit":
 			gamelogic.PrintQuit()
 			os.Exit(0)
